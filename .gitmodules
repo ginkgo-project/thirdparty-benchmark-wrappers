@@ -1,0 +1,15 @@
+[submodule "spgemm/ACSpGEMM"]
+	path = spgemm/ACSpGEMM
+	url = https://github.com/GPUPeople/ACSpGEMM.git
+[submodule "spgemm/spECK"]
+	path = spgemm/spECK
+	url = https://github.com/GPUPeople/spECK.git
+[submodule "spgemm/nsparse"]
+	path = spgemm/nsparse
+	url = https://github.com/EBD-CREST/nsparse.git
+[submodule "spgemm/kokkos"]
+	path = spgemm/kokkos
+	url = https://github.com/kokkos/kokkos.git
+[submodule "spgemm/kokkos-kernels"]
+	path = spgemm/kokkos-kernels
+	url = https://github.com/kokkos/kokkos-kernels.git
