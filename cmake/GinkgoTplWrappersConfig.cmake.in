@@ -1,0 +1,41 @@
+@PACKAGE_INIT@
+
+# Reuse a Ginkgo the consumer already has, e.g. one built in the same tree,
+# instead of loading a second one.
+if(NOT TARGET Ginkgo::ginkgo)
+    include(CMakeFindDependencyMacro)
+    find_dependency(Ginkgo)
+endif()
+
+# Components installed with this package. Without COMPONENTS, all of them are
+# loaded; a component whose third-party library cannot be found is then just
+# not found, while a requested one fails the find_package call.
+set(_gko_tpl_installed "@GKO_TPL_COMPONENTS@")
+set(_gko_tpl_requested ${${CMAKE_FIND_PACKAGE_NAME}_FIND_COMPONENTS})
+if(NOT _gko_tpl_requested)
+    set(_gko_tpl_requested ${_gko_tpl_installed})
+endif()
+foreach(_gko_tpl_component IN LISTS _gko_tpl_requested)
+    if(NOT _gko_tpl_component IN_LIST _gko_tpl_installed)
+        set(${CMAKE_FIND_PACKAGE_NAME}_${_gko_tpl_component}_FOUND FALSE)
+        set(${CMAKE_FIND_PACKAGE_NAME}_NOT_FOUND_MESSAGE
+            "component '${_gko_tpl_component}' is not part of this installation, which provides: ${_gko_tpl_installed}"
+        )
+        continue()
+    endif()
+    set(${CMAKE_FIND_PACKAGE_NAME}_${_gko_tpl_component}_FOUND TRUE)
+    # Sets <Package>_<component>_FOUND to FALSE if a dependency is missing.
+    include(
+        "${CMAKE_CURRENT_LIST_DIR}/GinkgoTplWrappers-${_gko_tpl_component}-dependencies.cmake"
+    )
+    if(${CMAKE_FIND_PACKAGE_NAME}_${_gko_tpl_component}_FOUND)
+        include(
+            "${CMAKE_CURRENT_LIST_DIR}/GinkgoTplWrappers-${_gko_tpl_component}-targets.cmake"
+        )
+    endif()
+endforeach()
+unset(_gko_tpl_installed)
+unset(_gko_tpl_requested)
+unset(_gko_tpl_component)
+
+check_required_components(${CMAKE_FIND_PACKAGE_NAME})

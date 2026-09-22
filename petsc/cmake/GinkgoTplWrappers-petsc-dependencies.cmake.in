@@ -1,0 +1,15 @@
+# Dependencies of GinkgoTpl::petsc. Sets
+# <Package>_petsc_FOUND to FALSE instead of failing, so that
+# check_required_components decides whether that is an error.
+if(NOT TARGET MPI::MPI_CXX)
+    find_package(MPI QUIET COMPONENTS CXX)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/gko_tpl_find_petsc.cmake")
+# $PETSC_DIR takes precedence over the PETSc this package was built against.
+gko_tpl_find_petsc(HINTS "@PETSC_PREFIX@")
+if(NOT TARGET MPI::MPI_CXX OR NOT TARGET PkgConfig::PETSC)
+    set(${CMAKE_FIND_PACKAGE_NAME}_petsc_FOUND FALSE)
+    set(${CMAKE_FIND_PACKAGE_NAME}_NOT_FOUND_MESSAGE
+        "GinkgoTpl::petsc needs MPI and PETSc; PETSc is found through pkg-config, set PETSC_DIR to its installation"
+    )
+endif()
