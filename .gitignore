@@ -30,3 +30,6 @@
 *.exe
 *.out
 *.app
+
+# Python byte code (gersemi loads .gersemi.py)
+__pycache__/

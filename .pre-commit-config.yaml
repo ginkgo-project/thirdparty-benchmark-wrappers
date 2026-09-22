@@ -1,0 +1,26 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+    -  id: end-of-file-fixer
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: 'v14.0.0'  # Same as Ginkgo, whose CI uses the Ubuntu 22.04 default
+  hooks:
+  - id: clang-format
+    types_or: [c, c++, cuda, inc]
+- repo: https://github.com/BlankSpruce/gersemi
+  rev: 0.20.1
+  hooks:
+  # Only .cmake files and CMakeLists.txt; the *.cmake.in templates are not
+  # valid CMake before configure_file/configure_package_config_file.
+  - id: gersemi
+    name: cmake-format
+- repo: local
+  hooks:
+  # The official reuse hook only supports calling lint, so we need our own hook
+  - id: reuse-annotate
+    name: reuse-annotate
+    entry: reuse annotate --license BSD-3-Clause --copyright 'The Ginkgo authors' --style c --merge-copyright
+    language: python
+    additional_dependencies: [reuse==2.1.0]
+    types_or: [c, c++, cuda, inc]

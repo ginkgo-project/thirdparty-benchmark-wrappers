@@ -1,45 +1,14 @@
-/*******************************<GINKGO LICENSE>******************************
-Copyright (c) 2017-2022, the Ginkgo authors
-All rights reserved.
+// SPDX-FileCopyrightText: 2017 - 2026 The Ginkgo authors
+//
+// SPDX-License-Identifier: BSD-3-Clause
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-1. Redistributions of source code must retain the above copyright
-notice, this list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its
-contributors may be used to endorse or promote products derived from
-this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
-IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
-TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
-PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-******************************<GINKGO LICENSE>*******************************/
-
-#include "benchmark_wrappers.hpp"
-
+#include <Kokkos_Core.hpp>
 
 #include <ginkgo/core/base/executor.hpp>
 
-
-#include <Kokkos_Core.hpp>
+#include "benchmark_wrappers.hpp"
 // separator to avoid clang-format reordering the includes :)
 #include <KokkosSparse_spgemm.hpp>
-
 
 #include "core/matrix/csr_builder.hpp"
 
@@ -48,7 +17,7 @@ namespace gko {
 
 template <typename ValueType>
 KokkosCsr<ValueType>::KokkosCsr(std::shared_ptr<const gko::Executor> exec,
-                                const gko::dim<2> &size)
+                                const gko::dim<2>& size)
     : gko::EnableLinOp<KokkosCsr<ValueType>>(exec, size),
       csr_(gko::share(
           csr::create(exec, std::make_shared<typename csr::classical>())))
@@ -68,7 +37,7 @@ KokkosCsr<ValueType>::~KokkosCsr()
 
 
 template <typename ValueType>
-void KokkosCsr<ValueType>::apply_impl(const LinOp *b, LinOp *x) const
+void KokkosCsr<ValueType>::apply_impl(const LinOp* b, LinOp* x) const
 {
     auto cuda_exec = as<CudaExecutor>(this->get_executor());
 
@@ -96,13 +65,13 @@ void KokkosCsr<ValueType>::apply_impl(const LinOp *b, LinOp *x) const
         handle;
     handle.create_spgemm_handle(KokkosSparse::SPGEMM_KK);
 
-    using int_view = Kokkos::View<const int32 *, mem_space,
+    using int_view = Kokkos::View<const int32*, mem_space,
                                   Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-    using val_view = Kokkos::View<const ValueType *, mem_space,
+    using val_view = Kokkos::View<const ValueType*, mem_space,
                                   Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-    using int_out_view = Kokkos::View<int32 *, mem_space,
+    using int_out_view = Kokkos::View<int32*, mem_space,
                                       Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-    using val_out_view = Kokkos::View<ValueType *, mem_space,
+    using val_out_view = Kokkos::View<ValueType*, mem_space,
                                       Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
     int_view this_row_view{this_row_ptrs, m + 1};

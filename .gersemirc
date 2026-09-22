@@ -1,0 +1,4 @@
+extensions:
+- .gersemi.py
+definitions:
+- cmake

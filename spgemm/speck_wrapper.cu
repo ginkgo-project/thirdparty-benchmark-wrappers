@@ -1,50 +1,19 @@
-/*******************************<GINKGO LICENSE>******************************
-Copyright (c) 2017-2022, the Ginkgo authors
-All rights reserved.
+// SPDX-FileCopyrightText: 2017 - 2026 The Ginkgo authors
+//
+// SPDX-License-Identifier: BSD-3-Clause
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-1. Redistributions of source code must retain the above copyright
-notice, this list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its
-contributors may be used to endorse or promote products derived from
-this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
-IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
-TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
-PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-******************************<GINKGO LICENSE>*******************************/
-
-#include "benchmark_wrappers.hpp"
-
-
-#include <Multiply.h>
 #include <dCSR.h>
+#include <Multiply.h>
 #include <spECKConfig.h>
 
-
+#include "benchmark_wrappers.hpp"
 #include "core/matrix/csr_builder.hpp"
 
 namespace gko {
 
 
 template <typename ValueType>
-void SpeckCsr<ValueType>::apply_impl(const LinOp *b, LinOp *x) const
+void SpeckCsr<ValueType>::apply_impl(const LinOp* b, LinOp* x) const
 {
     auto exec = as<CudaExecutor>(this->get_executor());
 
@@ -56,20 +25,20 @@ void SpeckCsr<ValueType>::apply_impl(const LinOp *b, LinOp *x) const
     this_wrap.rows = this->get_size()[0];
     this_wrap.cols = this->get_size()[1];
     this_wrap.nnz = this->csr_->get_num_stored_elements();
-    this_wrap.row_offsets = reinterpret_cast<uint32 *>(
-        const_cast<int32 *>(this->csr_->get_const_row_ptrs()));
-    this_wrap.col_ids = reinterpret_cast<uint32 *>(
-        const_cast<int32 *>(this->csr_->get_const_col_idxs()));
-    this_wrap.data = const_cast<ValueType *>(this->csr_->get_const_values());
+    this_wrap.row_offsets = reinterpret_cast<uint32*>(
+        const_cast<int32*>(this->csr_->get_const_row_ptrs()));
+    this_wrap.col_ids = reinterpret_cast<uint32*>(
+        const_cast<int32*>(this->csr_->get_const_col_idxs()));
+    this_wrap.data = const_cast<ValueType*>(this->csr_->get_const_values());
 
     b_wrap.rows = b_csr->get_size()[0];
     b_wrap.cols = b_csr->get_size()[1];
     b_wrap.nnz = b_csr->get_num_stored_elements();
-    b_wrap.row_offsets = reinterpret_cast<uint32 *>(
-        const_cast<int32 *>(b_csr->get_const_row_ptrs()));
-    b_wrap.col_ids = reinterpret_cast<uint32 *>(
-        const_cast<int32 *>(b_csr->get_const_col_idxs()));
-    b_wrap.data = const_cast<ValueType *>(b_csr->get_const_values());
+    b_wrap.row_offsets = reinterpret_cast<uint32*>(
+        const_cast<int32*>(b_csr->get_const_row_ptrs()));
+    b_wrap.col_ids = reinterpret_cast<uint32*>(
+        const_cast<int32*>(b_csr->get_const_col_idxs()));
+    b_wrap.data = const_cast<ValueType*>(b_csr->get_const_values());
 
     x_wrap.rows = x_csr->get_size()[0];
     x_wrap.cols = x_csr->get_size()[1];
@@ -93,11 +62,11 @@ void SpeckCsr<ValueType>::apply_impl(const LinOp *b, LinOp *x) const
 
     matrix::CsrBuilder<ValueType, int32> x_builder{x_csr};
     x_builder.get_col_idx_array() = Array<int32>(
-        exec, x_wrap.nnz, reinterpret_cast<int32 *>(x_wrap.col_ids));
+        exec, x_wrap.nnz, reinterpret_cast<int32*>(x_wrap.col_ids));
     x_builder.get_value_array() =
         Array<ValueType>(exec, x_wrap.nnz, x_wrap.data);
 
-    exec->copy(x_wrap.rows + 1, reinterpret_cast<int32 *>(x_wrap.row_offsets),
+    exec->copy(x_wrap.rows + 1, reinterpret_cast<int32*>(x_wrap.row_offsets),
                x_csr->get_row_ptrs());
     // prevent data from being deleted
     this_wrap.row_offsets = nullptr;
