@@ -32,7 +32,10 @@ endif()
 set(GKO_TPL_COMPONENTS "")
 if(GKO_TPL_BUILD_PETSC)
     add_subdirectory(petsc)
-    list(APPEND GKO_TPL_COMPONENTS petsc)
+    # skipped as a subproject when PETSc is missing
+    if(TARGET gko_tpl_petsc)
+        list(APPEND GKO_TPL_COMPONENTS petsc)
+    endif()
 endif()
 
 if(GKO_TPL_INSTALL)

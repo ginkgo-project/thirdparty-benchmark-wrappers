@@ -40,7 +40,7 @@ cmake --install build --prefix <prefix>
 
 | Option | Default | Meaning |
 |---|---|---|
-| `GKO_TPL_BUILD_PETSC` | `ON` | Build the `petsc` component |
+| `GKO_TPL_BUILD_PETSC` | `ON` | Build the `petsc` component; a missing PETSc is an error, or skips the component when used as a subproject |
 | `GKO_TPL_BUILD_TESTS` | `ON` when top-level | Build the tests |
 | `GKO_TPL_INSTALL` | `ON` when top-level | Generate install rules and the package config |
 
@@ -63,15 +63,28 @@ The installed package remembers the PETSc it was built against and uses it
 when `PETSC_DIR` is not set.
 
 From the same build tree, e.g. in a project that already builds or finds
-Ginkgo:
+Ginkgo, with FetchContent or `add_subdirectory`:
 
 ```cmake
-add_subdirectory(<path>/thirdparty-benchmark-wrappers tpl)  # or FetchContent
-target_link_libraries(app PRIVATE GinkgoTpl::petsc)
+include(FetchContent)
+FetchContent_Declare(
+    ginkgo_tpl_wrappers
+    GIT_REPOSITORY https://github.com/ginkgo-project/thirdparty-benchmark-wrappers.git
+    GIT_TAG <commit>
+    GIT_SUBMODULES "" # the spgemm/ submodules are not part of the package
+)
+FetchContent_MakeAvailable(ginkgo_tpl_wrappers)
+if(TARGET GinkgoTpl::petsc)
+    target_link_libraries(app PRIVATE GinkgoTpl::petsc)
+endif()
 ```
 
 If a `Ginkgo::ginkgo` target already exists, it is used instead of searching
-for another Ginkgo. Tests and install rules are off by default in this case.
+for another Ginkgo. Tests and install rules are off by default in this case,
+and a component whose library is not found is skipped instead of failing the
+configuration, so check that its target exists. `GIT_SUBMODULES ""` needs the
+consuming project to require CMake 3.16 or newer; otherwise FetchContent
+clones every submodule, including Kokkos and Kokkos Kernels.
 
 ### PETSc KSP solver
 

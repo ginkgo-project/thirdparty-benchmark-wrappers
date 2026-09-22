@@ -1,5 +1,19 @@
 include(gko_tpl_find_petsc)
-gko_tpl_find_petsc(REQUIRED)
+# Built on its own, a missing PETSc is an error. As a subproject, e.g. fetched
+# by an example that also runs without PETSc, it only skips this component;
+# the consumer checks if(TARGET GinkgoTpl::petsc).
+if(PROJECT_IS_TOP_LEVEL)
+    gko_tpl_find_petsc(REQUIRED)
+else()
+    gko_tpl_find_petsc()
+    if(NOT PETSC_FOUND)
+        message(
+            STATUS
+            "GinkgoTpl::petsc: PETSc not found through pkg-config (set PETSC_DIR), skipping it"
+        )
+        return()
+    endif()
+endif()
 message(
     STATUS
     "GinkgoTpl::petsc: using PETSc ${PETSC_VERSION} from ${PETSC_PREFIX}"
