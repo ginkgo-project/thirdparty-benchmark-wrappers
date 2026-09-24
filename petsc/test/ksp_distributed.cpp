@@ -12,7 +12,7 @@
 #include <gko_tpl/petsc/ksp.hpp>
 
 #include "common/test/assertions.hpp"
-#include "petsc/test/laplacian.hpp"
+#include "common/test/laplacian.hpp"
 
 
 class KspDistributed : public ::testing::Test {

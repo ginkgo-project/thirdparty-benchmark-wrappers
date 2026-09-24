@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: BSD-3-Clause
 
-#ifndef GKO_TPL_PETSC_TEST_LAPLACIAN_HPP_
-#define GKO_TPL_PETSC_TEST_LAPLACIAN_HPP_
+#ifndef GKO_TPL_COMMON_TEST_LAPLACIAN_HPP_
+#define GKO_TPL_COMMON_TEST_LAPLACIAN_HPP_
 
 
 #include <ginkgo/core/base/dim.hpp>
@@ -48,4 +48,4 @@ gko::matrix_data<double, IndexType> laplacian_3d(IndexType n)
 }
 
 
-#endif  // GKO_TPL_PETSC_TEST_LAPLACIAN_HPP_
+#endif  // GKO_TPL_COMMON_TEST_LAPLACIAN_HPP_

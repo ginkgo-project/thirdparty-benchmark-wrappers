@@ -4,6 +4,7 @@ project(GinkgoTplWrappers VERSION 0.1.0 LANGUAGES CXX)
 # One option per wrapped library. Each component is an independent target,
 # GinkgoTpl::<component>, and only looks for its own third-party library.
 option(GKO_TPL_BUILD_PETSC "Build the PETSc wrappers (GinkgoTpl::petsc)" ON)
+option(GKO_TPL_BUILD_HYPRE "Build the hypre wrappers (GinkgoTpl::hypre)" ON)
 option(GKO_TPL_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
 option(
     GKO_TPL_INSTALL
@@ -35,6 +36,13 @@ if(GKO_TPL_BUILD_PETSC)
     # skipped as a subproject when PETSc is missing
     if(TARGET gko_tpl_petsc)
         list(APPEND GKO_TPL_COMPONENTS petsc)
+    endif()
+endif()
+if(GKO_TPL_BUILD_HYPRE)
+    add_subdirectory(hypre)
+    # skipped as a subproject when hypre is missing
+    if(TARGET gko_tpl_hypre)
+        list(APPEND GKO_TPL_COMPONENTS hypre)
     endif()
 endif()
 

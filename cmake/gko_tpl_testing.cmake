@@ -40,5 +40,8 @@ function(gko_tpl_add_test name)
             ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${arg_MPI_SIZE}
             ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}> ${MPIEXEC_POSTFLAGS}
     )
-    set_tests_properties(${name} PROPERTIES PROCESSORS ${arg_MPI_SIZE})
+    set_tests_properties(
+        ${name}
+        PROPERTIES PROCESSORS ${arg_MPI_SIZE} TIMEOUT 300
+    )
 endfunction()

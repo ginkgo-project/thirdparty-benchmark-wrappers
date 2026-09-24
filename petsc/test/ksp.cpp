@@ -16,7 +16,7 @@
 #include <gko_tpl/petsc/ksp.hpp>
 
 #include "common/test/assertions.hpp"
-#include "petsc/test/laplacian.hpp"
+#include "common/test/laplacian.hpp"
 
 
 // Names of the options in PETSc's database that carry a Ksp instance prefix

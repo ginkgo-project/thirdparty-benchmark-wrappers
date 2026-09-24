@@ -1,0 +1,15 @@
+# Dependencies of GinkgoTpl::hypre. Sets
+# <Package>_hypre_FOUND to FALSE instead of failing, so that
+# check_required_components decides whether that is an error.
+if(NOT TARGET MPI::MPI_CXX)
+    find_package(MPI QUIET COMPONENTS CXX)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/gko_tpl_find_hypre.cmake")
+# $HYPRE_ROOT takes precedence over the hypre this package was built against.
+gko_tpl_find_hypre(HINTS "@HYPRE_PREFIX@")
+if(NOT TARGET MPI::MPI_CXX OR NOT TARGET HYPRE::HYPRE)
+    set(${CMAKE_FIND_PACKAGE_NAME}_hypre_FOUND FALSE)
+    set(${CMAKE_FIND_PACKAGE_NAME}_NOT_FOUND_MESSAGE
+        "GinkgoTpl::hypre needs MPI and hypre; set HYPRE_ROOT to hypre's installation"
+    )
+endif()

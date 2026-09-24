@@ -10,7 +10,7 @@
 
 #include <gko_tpl/petsc/ksp.hpp>
 
-#include "petsc/test/laplacian.hpp"
+#include "common/test/laplacian.hpp"
 
 
 TEST(KspWithoutPetscEnvironment, ThrowsOnGenerate)
