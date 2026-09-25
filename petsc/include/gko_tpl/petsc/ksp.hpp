@@ -272,8 +272,8 @@ Ksp<ValueType, IndexType>::Ksp(const Factory* factory,
                     PETSC_DETERMINE, PETSC_DETERMINE));
     // PETSc derives hypre's option set from the matrix's memory type
     // (src/ksp/pc/impls/hypre/impl/ihypre.c): a device matrix gets the
-    // GPU-supported defaults -- PMIS coarsening, ext+i interpolation,
-    // l1-scaled Jacobi -- while a host matrix gets Falgout with classical
+    // GPU-supported defaults (PMIS coarsening, ext+i interpolation,
+    // l1-scaled Jacobi), while a host matrix gets Falgout with classical
     // interpolation, neither of which has a device implementation. Handing
     // PETSc a host MATAIJ while Ginkgo runs on a GPU therefore benchmarks
     // host-side BoomerAMG, so follow the executor instead.

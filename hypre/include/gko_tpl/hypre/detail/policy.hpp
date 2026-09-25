@@ -31,9 +31,14 @@ inline std::optional<HYPRE_MemoryLocation>& active_memory_location()
 }
 
 
-// Sets hypre's process-wide policy, or throws if a policy is already in force
-// and differs. Running a solver under the wrong policy would silently produce
-// wrong results or crash inside hypre, so the conflict is reported instead.
+// Sets hypre's process-wide policy, or throws if one is already in force and
+// differs, since running under the wrong policy would silently produce
+// wrong results or crash inside hypre.
+//
+// HYPRE_Initialize() leaves this policy at HYPRE_MEMORY_DEVICE on a
+// GPU-enabled hypre, not HYPRE_MEMORY_HOST, so every hypre-object-creating
+// call site in this component calls this first with its own memory
+// location, idempotently, rather than trusting what ran earlier.
 inline void set_process_policy(HYPRE_MemoryLocation location)
 {
     auto& active = active_memory_location();

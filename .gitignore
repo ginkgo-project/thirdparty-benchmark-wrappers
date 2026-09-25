@@ -33,3 +33,6 @@
 
 # Python byte code (gersemi loads .gersemi.py)
 __pycache__/
+
+# CMake build trees (build/, build-clean/, build-hypre232/, ...)
+build*/

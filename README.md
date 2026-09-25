@@ -26,9 +26,10 @@ CMake package.
   `PETSC_DIR` (and `PETSC_ARCH` for an in-place PETSc build), or add PETSc's
   `lib/pkgconfig` to `PKG_CONFIG_PATH`. Solving on the GPU needs a
   CUDA-enabled PETSc.
-- For `hypre`: hypre 2.32.0 or newer. Set `HYPRE_ROOT` to its installation, or
-  to a PETSc prefix built with `--download-hypre` (PETSc installs hypre into
-  its own prefix, so `HYPRE_ROOT=$PETSC_DIR` works).
+- For `hypre`: hypre 2.32 or newer (2.32 is tested; 3.2 is the target, and
+  the APIs the component prefers arrived in 2.33). Set `HYPRE_ROOT` to its
+  installation, or to a PETSc prefix built with `--download-hypre` (PETSc
+  installs hypre into its own prefix, so `HYPRE_ROOT=$PETSC_DIR` works).
 
 The PETSc component is tested with PETSc 3.23 on the CPU. The CUDA path is
 not tested yet.
@@ -219,20 +220,19 @@ int main(int argc, char* argv[])
   a row partition whose parts are contiguous and ordered by rank, solved with
   `experimental::distributed::Vector`s. Only a single right-hand side is
   supported.
-- **The matrix is aliased, not copied.** This is the reason the component
-  exists: hypre's `hypre_ParCSRMatrix` points directly at the Ginkgo matrix's
-  `diag`/`offd` arrays (and at the index map's remote global indices for the
-  non-local block), so import time is hypre's own conversion cost, not a
-  translation through PETSc, and nothing is staged through the host on any
-  executor. `apply()` hands `b` and `x` to hypre over Ginkgo's own arrays the
-  same way. Because the alias borrows the matrix's memory, the solver keeps a
-  `shared_ptr` to the system matrix alive for as long as it needs it — unlike
-  `Ksp`, which copies the matrix into PETSc's own triplets and lets the
-  Ginkgo matrix go.
+- **Aliasing:** the matrix is aliased from Ginkgo's arrays, apart from the
+  diagonal block's columns and values, which are copied and permuted so
+  each row's diagonal is stored first — BoomerAMG requires this, and Ginkgo
+  stores columns in ascending order. `b` and `x` are handed over without
+  copying too, and re-pointed per solve. The solver keeps the system matrix
+  alive for as long as it is aliased (a `shared_ptr`), unlike `Ksp`, which
+  copies into PETSc's own triplets.
 - **hypre's memory location and execution policy are process-global**
-  (`HYPRE_SetMemoryLocation`/`HYPRE_SetExecutionPolicy`), not per solver.
-  Generating a solver on a host executor and another on a device executor in
-  the same process throws instead of silently running with the wrong policy.
+  (`HYPRE_SetMemoryLocation`/`HYPRE_SetExecutionPolicy`), not per solver:
+  generating a host and a device solver in the same process throws. A
+  GPU-enabled hypre defaults to the device location; the component
+  establishes the policy itself before creating any hypre object, so this
+  is handled regardless of what else ran earlier in the process.
 - **Parameters:**
 
   | Parameter | Type | Note |
@@ -242,7 +242,7 @@ int main(int argc, char* argv[])
   | `two_norm` | `bool`, default `true` | stop on the unpreconditioned relative 2-norm, the quantity Ginkgo's `ResidualNorm` uses; hypre's own default is the preconditioned norm, which is not comparable |
   | `coarsen_type` | `std::string` | BoomerAMG coarsening, e.g. `"PMIS"`, `"HMIS"`, `"Falgout"`; empty (the default) keeps hypre's own default |
   | `interp_type` | `std::string` | BoomerAMG interpolation, e.g. `"ext+i"`, `"classical"`; empty keeps hypre's default |
-  | `relax_type` | `std::string` | BoomerAMG smoother, e.g. `"Jacobi"`, `"l1-Jacobi"`, `"hybrid-GS"`; empty keeps hypre's default |
+  | `relax_type` | `std::string` | BoomerAMG smoother, e.g. `"Jacobi"`, `"l1-Jacobi"`, `"hybrid-GS"`; empty keeps hypre's default. Type 0 (`"Jacobi"`) has no hypre device implementation; it is rejected on a device executor, use `"l1-Jacobi"` there instead |
   | `relax_weight` | `double` | negative (the default) keeps hypre's default |
   | `num_sweeps` | `int` | zero (the default) keeps hypre's default |
   | `max_levels` | `int` | hypre counts the finest level, Ginkgo does not; zero keeps hypre's default |
@@ -261,24 +261,14 @@ int main(int argc, char* argv[])
   hangs rather than failing.
 - **Diagnostics:** `get_num_iterations()`, `get_residual_norm()`,
   `has_converged()`, `get_import_time()`, `get_setup_time()` — the same
-  surface as `Ksp` — plus `get_hierarchy()`, which returns the number of
-  levels and the rows per level BoomerAMG's setup drew. It is populated on
-  every supported hypre, 2.32 included: the underlying
-  `HYPRE_BoomerAMGGetGridHierarchy` is public API in both 2.32 and 3.2, and
-  the two report the same hierarchy for the same setup.
-- **Two hypre copies in one executable:** an executable that links both
-  `GinkgoTpl::petsc` and `GinkgoTpl::hypre` must use a single hypre, or it
-  ends up with two copies of hypre's symbols in the one binary. Point
-  `HYPRE_ROOT` at the PETSc prefix so both components resolve to the same
-  hypre; this is verified to work, including both solvers converging to the
-  same solution in one process.
-- **CUDA:** the component is written for a `CudaExecutor` and compiles there,
-  but has not been run — no GPU-built hypre exists in the environments this
-  component has been tested in, so the CUDA path is unverified, like `Ksp`'s.
-  Generating on a Ginkgo device executor against a hypre built *without* GPU
-  support is rejected at generation: such a hypre maps `HYPRE_MEMORY_DEVICE`
-  to `HYPRE_MEMORY_HOST` internally and would read the device pointers as
-  host memory without reporting anything.
+  surface as `Ksp` — plus `get_hierarchy()`: the number of levels and rows
+  per level BoomerAMG's setup drew, populated on every supported hypre
+  (2.32 and newer).
+- **CUDA:** exercised on Daint (GH200) — a device run converges. Device
+  PMIS draws a different hierarchy at every setup; the host is
+  deterministic. A hypre built without GPU support is rejected at
+  generation on a device executor rather than silently misreading device
+  pointers as host memory.
 
 The solver can also be configured from JSON under the type name
 `ext::hypre::solver::Pcg`, after adding its configuration map to the

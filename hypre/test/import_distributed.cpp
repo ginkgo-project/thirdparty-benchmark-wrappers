@@ -114,3 +114,40 @@ TEST_F(ImportDistributed, RejectsAnUnsupportedOperator)
                      local_index_type>(dense)
                      .has_value());
 }
+
+
+// hypre reads a row's diagonal as its first stored entry (see
+// reorder_diag_first in detail/import.hpp); Ginkgo stores columns in
+// ascending order, so without that reordering an interior row's first entry
+// is an off-diagonal coefficient instead. This is what pins the invariant
+// down directly, rather than only through convergence, the way the bug that
+// motivated it was originally (and only indirectly) caught.
+//
+// The off-diagonal block is not checked here: it holds no diagonal entry at
+// all (a rank's off-diagonal columns are, by construction, all non-local),
+// so it is never reordered and the invariant does not apply to it, see
+// build_distributed_par_csr's comment in detail/import.hpp.
+TEST_F(ImportDistributed, DiagonalIsFirstInEachRow)
+{
+    auto imported = gko::ext::hypre::detail::build_any_distributed_par_csr<
+        local_index_type>(mtx);
+    ASSERT_TRUE(imported.has_value());
+    // par_csr::diag_row_ptrs/diag_col_idxs are only populated when
+    // as_hypre_int/copy_as_hypre_int actually convert or copy; when
+    // LocalIndexType already matches HYPRE_Int, as_hypre_int returns
+    // Ginkgo's own pointer without touching its `storage` argument, so
+    // diag_row_ptrs can be an empty array. The hypre matrix's own diag block
+    // is what set_block always points at the real, in-use arrays, so it is
+    // read directly here instead.
+    auto* diag = hypre_ParCSRMatrixDiag(imported->matrix);
+    const auto* row_ptrs = hypre_CSRMatrixI(diag);
+    const auto* col_idxs = hypre_CSRMatrixJ(diag);
+    for (HYPRE_Int row = 0; row < imported->num_local_rows; row++) {
+        if (row_ptrs[row + 1] > row_ptrs[row]) {
+            EXPECT_EQ(col_idxs[row_ptrs[row]], row)
+                << "rank " << comm.rank() << ": row " << row
+                << " of the diagonal block does not have its diagonal entry "
+                   "first";
+        }
+    }
+}

@@ -77,7 +77,8 @@ function(gko_tpl_find_hypre)
         get_filename_component(HYPRE_PREFIX "${dir}" DIRECTORY)
     endif()
     # 2.32 is the oldest tested version, and the one PETSc bundles; the
-    # component targets 3.2 and guards what is newer than 2.32.
+    # component targets 3.2; APIs added in 2.33 are guarded on the release
+    # number, so 2.32 stays supported.
     if(HYPRE_VERSION AND HYPRE_VERSION VERSION_LESS 2.32.0)
         message(
             FATAL_ERROR

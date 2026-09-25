@@ -23,6 +23,18 @@ TEST(Options, MapsDocumentedNames)
 }
 
 
+TEST(Options, RelaxTypeDeviceCapability)
+{
+    // Type 0 (plain weighted Jacobi) has no device implementation, see
+    // relax_type_runs_on_device's documentation in detail/options.hpp; 7
+    // and 18 (Jacobi via Matvec, and l1-Jacobi which forwards to it on
+    // device) do.
+    ASSERT_FALSE(gko::ext::hypre::detail::relax_type_runs_on_device(0));
+    ASSERT_TRUE(gko::ext::hypre::detail::relax_type_runs_on_device(7));
+    ASSERT_TRUE(gko::ext::hypre::detail::relax_type_runs_on_device(18));
+}
+
+
 TEST(Options, RejectsUnknownNamesAndListsTheAcceptedOnes)
 {
     try {

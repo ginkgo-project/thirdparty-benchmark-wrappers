@@ -9,7 +9,7 @@
 #include <mpi.h>
 
 // Not <_hypre_seq_mv.h> directly: it was renamed between versions
-// (seq_mv.h in 2.32, _hypre_seq_mv.h in 3.2); _hypre_parcsr_mv.h below
+// (seq_mv.h before 2.33, _hypre_seq_mv.h after); _hypre_parcsr_mv.h below
 // includes whichever name is correct for the installed version.
 #include <_hypre_parcsr_mv.h>
 #include <HYPRE.h>
@@ -19,6 +19,7 @@
 #include <ginkgo/core/base/exception_helpers.hpp>
 
 #include <gko_tpl/hypre/detail/error.hpp>
+#include <gko_tpl/hypre/detail/policy.hpp>
 
 
 namespace gko {
@@ -31,14 +32,15 @@ namespace detail {
 // and frees nothing, so a solve copies no vector data. Equivalent of PETSc's
 // VecPlaceArray.
 //
-// 3.2 offers this through its public IJ interface, used here. 2.32 has
+// 2.33 and newer offer this through the public IJ interface, used here.
+// Older hypre has
 // neither HYPRE_IJVectorInitializeShell nor HYPRE_IJVectorSetData, so it
 // goes through hypre's internals instead: hypre_SeqVectorInitialize_v2 only
 // allocates when the data pointer is still null, so setting it first and
 // clearing the local vector's owner flag leaves the caller's array in place.
 //
-// Construction is not free -- 3.2's HYPRE_IJVectorAssemble does an
-// unconditional Allreduce -- so a solver builds its vectors once and
+// Construction is not free, since HYPRE_IJVectorAssemble does an
+// unconditional Allreduce, so a solver builds its vectors once and
 // re-points them with set_values() per apply instead, see there.
 class placed_vector {
 public:
@@ -46,13 +48,22 @@ public:
                   HYPRE_BigInt row_start, HYPRE_Int local_size,
                   const double* values, HYPRE_MemoryLocation location)
     {
+        // Establishes hypre's process-global policy before the hypre object
+        // below is created, rather than relying on a caller (e.g.
+        // solver::Pcg) to have already done so: HYPRE_Initialize() leaves the
+        // process at HYPRE_MEMORY_DEVICE on a GPU-enabled hypre, so building
+        // a placed_vector directly over a host array would otherwise have
+        // hypre treat it as device memory. Idempotent when the policy
+        // already matches; nothing hypre-related exists yet if it throws, so
+        // this sits outside the try block below.
+        set_process_policy(location);
         auto* data = const_cast<HYPRE_Complex*>(
             static_cast<const HYPRE_Complex*>(values));
         // A throw after HYPRE_IJVectorCreate (or hypre_ParVectorCreate) would
         // leak the hypre object, since a failed constructor's destructor
         // never runs; caught below and released via destroy() instead.
         try {
-#if HYPRE_RELEASE_NUMBER >= 30200
+#if HYPRE_RELEASE_NUMBER >= 23300
             // Unused here: the IJ interface takes hypre's process-global
             // location and derives global_size from the range. Kept in the
             // signature since the 2.32 branch below does need `location`.
@@ -80,7 +91,7 @@ public:
                 GKO_INVALID_STATE("hypre_ParVectorCreate returned null");
             }
             owns_par_vector_ = true;
-            // 2.32 has no hypre_ParVectorSetData (a 3.2 addition), so the
+            // Older hypre has no hypre_ParVectorSetData, so the
             // local vector's data pointer is assigned directly through the
             // struct macros, set before Initialize_v2 since
             // hypre_SeqVectorInitialize_v2 only allocates when it is null.
@@ -110,7 +121,7 @@ public:
      * nothing is copied and hypre does not free it, exactly as at
      * construction.
      *
-     * Needs no re-assembly and does no collective work. On 3.2,
+     * Needs no re-assembly and does no collective work. On 2.33+,
      * hypre_SeqVectorSetData only frees the old array if the vector owns it
      * (it doesn't, the owner flag was already cleared) and otherwise just
      * stores the new pointer; size, partitioning and memory location are
@@ -121,7 +132,7 @@ public:
     {
         auto* data = const_cast<HYPRE_Complex*>(
             static_cast<const HYPRE_Complex*>(values));
-#if HYPRE_RELEASE_NUMBER >= 30200
+#if HYPRE_RELEASE_NUMBER >= 23300
         GKO_TPL_ASSERT_NO_HYPRE_ERRORS(HYPRE_IJVectorSetData(ij_vector_, data));
 #else
         hypre_VectorData(hypre_ParVectorLocalVector(vector_)) = data;

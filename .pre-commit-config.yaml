@@ -1,3 +1,7 @@
+# Build trees are not source: nothing in them should ever be formatted or
+# given a license header, even if a path inside one is passed explicitly.
+exclude: '^build[^/]*/'
+
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

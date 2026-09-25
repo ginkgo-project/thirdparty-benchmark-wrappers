@@ -38,6 +38,9 @@ target_compile_features(gko_tpl_hypre INTERFACE cxx_std_17)
 
 if(GKO_TPL_BUILD_TESTS)
     add_subdirectory(test)
+    # Diagnostic tools, gated the same way but never registered with ctest,
+    # see tools/CMakeLists.txt.
+    add_subdirectory(tools)
 endif()
 
 if(GKO_TPL_INSTALL)

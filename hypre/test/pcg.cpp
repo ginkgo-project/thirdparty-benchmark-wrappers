@@ -108,7 +108,7 @@ TEST_F(Pcg, ReportsImportAndSetupTimes)
 
 TEST_F(Pcg, PassesTheParametersToHypre)
 {
-    // hypre 3.2 exposes getters for what it was configured with; the
+    // hypre 2.33+ exposes getters for what it was configured with; the
     // callback runs after the typed setters, so the handle carries them.
     HYPRE_Solver amg = nullptr;
     auto solver = pcg_type::build()
@@ -120,7 +120,7 @@ TEST_F(Pcg, PassesTheParametersToHypre)
                       ->generate(mtx);
 
     ASSERT_NE(amg, nullptr);
-#if HYPRE_RELEASE_NUMBER >= 30200
+#if HYPRE_RELEASE_NUMBER >= 23300
     HYPRE_Int coarsen_type = 0;
     HYPRE_Real threshold = 0.0;
     HYPRE_Int max_levels = 0;
@@ -210,6 +210,45 @@ TEST_F(Pcg, RepeatedApplyGivesTheSameAnswer)
     ASSERT_EQ(solver->get_num_iterations(), first_iterations);
     GKO_TPL_ASSERT_MTX_NEAR(x_first, x_first_before, 0.0);
     GKO_TPL_ASSERT_MTX_NEAR(x_second, x_first, 1e-14);
+}
+
+
+TEST_F(Pcg, DoesNotThrowWhenItFailsToConverge)
+{
+    // hypre reports "the iteration ran out of steps" by returning
+    // HYPRE_ERROR_CONV, the same channel it reports real failures through,
+    // and that flag is global and sticky. This pins the documented contract:
+    // the solve returns, has_converged() says no, the attempt is still
+    // readable, and the flag does not leak into later hypre calls. A single
+    // iteration cannot reach 1e-14 on this system, so the non-convergence is
+    // a property of the parameters rather than of the operator. Everything
+    // after the first apply (the getters, the second generate and the
+    // second solve) would report that first solve's flag as a failure of
+    // its own if it were not cleared.
+    auto solver = pcg_type::build()
+                      .with_tolerance(1e-14)
+                      .with_max_iters(1)
+                      .on(ref)
+                      ->generate(mtx);
+
+    ASSERT_NO_THROW(solver->apply(b, x));
+
+    ASSERT_FALSE(solver->has_converged());
+    ASSERT_EQ(solver->get_num_iterations(), 1u);
+    ASSERT_GT(solver->get_residual_norm(), 0.0);
+
+    auto converging = pcg_type::build()
+                          .with_tolerance(1e-10)
+                          .with_max_iters(200)
+                          .on(ref)
+                          ->generate(mtx);
+    auto x_converging = gko::clone(x);
+    x_converging->fill(0.0);
+
+    ASSERT_NO_THROW(converging->apply(b, x_converging));
+
+    ASSERT_TRUE(converging->has_converged());
+    ASSERT_LE(relative_residual(x_converging.get()), 1e-9);
 }
 
 

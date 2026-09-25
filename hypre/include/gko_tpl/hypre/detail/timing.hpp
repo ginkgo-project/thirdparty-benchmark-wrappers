@@ -34,12 +34,12 @@ inline std::chrono::steady_clock::time_point end_of_phase(MPI_Comm comm,
     // HYPRE_MEMORY_DEVICE otherwise.
 #if defined(HYPRE_USING_GPU)
     if (device) {
-        // hypre 3.2's hypre_SyncDevice() replaces 2.32's
+        // hypre 2.33's hypre_SyncDevice() replaces the older
         // hypre_SyncCudaDevice(hypre_Handle*): same synchronization, but the
         // handle moved from an explicit argument to internal state, reached
         // here via hypre_handle(), which both versions declare
         // unconditionally.
-#if HYPRE_RELEASE_NUMBER >= 30200
+#if HYPRE_RELEASE_NUMBER >= 23300
         GKO_TPL_ASSERT_NO_HYPRE_ERRORS(hypre_SyncDevice());
 #else
         GKO_TPL_ASSERT_NO_HYPRE_ERRORS(hypre_SyncCudaDevice(hypre_handle()));

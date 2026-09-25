@@ -30,6 +30,7 @@
 #include <ginkgo/core/matrix/csr.hpp>
 
 #include <gko_tpl/hypre/detail/error.hpp>
+#include <gko_tpl/hypre/detail/policy.hpp>
 
 
 namespace gko {
@@ -88,9 +89,61 @@ const HYPRE_Int* as_hypre_int(std::shared_ptr<const Executor> exec,
 }
 
 
+// hypre's view of a Ginkgo index array, always as a copy hypre is free to
+// permute, in the same memory space. Used for the diagonal block's columns,
+// which reorder_diag_first rearranges in place.
+template <typename IndexType>
+HYPRE_Int* copy_as_hypre_int(std::shared_ptr<const Executor> exec,
+                             const IndexType* data, size_type size,
+                             array<HYPRE_Int>& storage)
+{
+    if constexpr (std::is_same<IndexType, HYPRE_Int>::value) {
+        storage = array<HYPRE_Int>{exec, size};
+        exec->copy(size, data, storage.get_data());
+    } else {
+        // The converting path already produces a fresh array on exec.
+        as_hypre_int(exec, data, size, storage);
+    }
+    return storage.get_data();
+}
+
+
+// hypre's ParCSR format requires the first entry stored in each row of the
+// diagonal block to be that row's diagonal: hypre reads the diagonal as
+// A_diag_data[A_diag_i[i]], literally the row's first stored entry, in the
+// strength-of-connection matrix (hypre_BoomerAMGCreateS) and in every
+// relaxation that divides by the diagonal. Ginkgo stores a row's columns in
+// ascending order, so for an interior row the first entry is an off-diagonal
+// coefficient, and BoomerAMG would coarsen and smooth with that instead.
+// hypre's own IJ assembly reorders for exactly this reason, and so does
+// PETSc before handing a matrix to hypre.
+//
+// Both routines below permute the block's arrays in place, which is why the
+// diagonal block's columns and values are copies owned by par_csr rather than
+// Ginkgo's own arrays. The row pointers are untouched by a within-row
+// permutation and keep aliasing Ginkgo's memory.
+//
+// hypre_CSRMatrixSetRownnz must have run on the block first: the host
+// reorder iterates over hypre_CSRMatrixNumRownnz rows, and does nothing at
+// all while that count is still zero.
+inline void reorder_diag_first(hypre_CSRMatrix* diag,
+                               HYPRE_MemoryLocation memory_location)
+{
+#if defined(HYPRE_USING_GPU)
+    if (memory_location == HYPRE_MEMORY_DEVICE) {
+        GKO_TPL_ASSERT_NO_HYPRE_ERRORS(
+            hypre_CSRMatrixMoveDiagFirstDevice(diag));
+        return;
+    }
+#endif
+    GKO_TPL_ASSERT_NO_HYPRE_ERRORS(hypre_CSRMatrixReorder(diag));
+}
+
+
 // A hypre matrix over Ginkgo's memory, plus what must outlive it: the Ginkgo
-// matrix its arrays point at, and any array converted for a differing index
-// type.
+// matrix its arrays point at, any array converted for a differing index type,
+// and the diagonal block's columns and values, which are copies rather than
+// Ginkgo's arrays, see reorder_diag_first.
 struct par_csr {
     hypre_ParCSRMatrix* matrix = nullptr;
     MPI_Comm comm = MPI_COMM_NULL;
@@ -101,6 +154,7 @@ struct par_csr {
     HYPRE_MemoryLocation memory_location = HYPRE_MEMORY_HOST;
     array<HYPRE_Int> diag_row_ptrs;
     array<HYPRE_Int> diag_col_idxs;
+    array<double> diag_values;
     array<HYPRE_Int> offd_row_ptrs;
     array<HYPRE_Int> offd_col_idxs;
     std::shared_ptr<const LinOp> system_matrix;
@@ -127,6 +181,7 @@ struct par_csr {
             std::swap(memory_location, other.memory_location);
             std::swap(diag_row_ptrs, other.diag_row_ptrs);
             std::swap(diag_col_idxs, other.diag_col_idxs);
+            std::swap(diag_values, other.diag_values);
             std::swap(offd_row_ptrs, other.offd_row_ptrs);
             std::swap(offd_col_idxs, other.offd_col_idxs);
             std::swap(system_matrix, other.system_matrix);
@@ -142,7 +197,11 @@ struct par_csr {
             // hypre_CSRMatrixDestroy frees a block's row-pointer array
             // unconditionally, regardless of the data-owner flag (unlike its
             // column-index and value arrays), so `I` must be nulled by hand
-            // to keep it from freeing Ginkgo's memory.
+            // to keep it from freeing Ginkgo's memory. `J` and `Data` are
+            // nulled too: for the diagonal block they are this object's own
+            // arrays rather than Ginkgo's, but either way they are not
+            // hypre's to free, and both are destroyed with the members below,
+            // after this body has run.
             auto* diag = hypre_ParCSRMatrixDiag(matrix);
             if (diag) {
                 hypre_CSRMatrixI(diag) = nullptr;
@@ -207,6 +266,15 @@ par_csr build_serial_par_csr(std::shared_ptr<const LinOp> system_matrix)
     result.memory_location = memory_location_of(exec);
     result.system_matrix = system_matrix;
 
+    // Establishes hypre's process-global policy before the first hypre
+    // object below is created, rather than relying on a caller (e.g.
+    // solver::Pcg) to have already done so: HYPRE_Initialize() leaves the
+    // process at HYPRE_MEMORY_DEVICE on a GPU-enabled hypre, so calling this
+    // helper directly on a host executor would otherwise have hypre treat
+    // these host arrays as device memory. Idempotent when the policy already
+    // matches, e.g. when Pcg's constructor set it moments ago.
+    set_process_policy(result.memory_location);
+
     HYPRE_BigInt starts[2] = {0, result.global_rows};
     result.matrix = hypre_ParCSRMatrixCreate(result.comm, result.global_rows,
                                              result.global_rows, starts, starts,
@@ -214,17 +282,22 @@ par_csr build_serial_par_csr(std::shared_ptr<const LinOp> system_matrix)
     const auto row_ptrs = as_hypre_int(exec, mtx->get_const_row_ptrs(),
                                        static_cast<size_type>(num_rows) + 1,
                                        result.diag_row_ptrs);
+    // The diagonal block's columns and values are copies, in the same memory
+    // space, because reorder_diag_first permutes them in place; Ginkgo's own
+    // arrays must not be rearranged under the caller.
     const auto col_idxs =
-        as_hypre_int(exec, mtx->get_const_col_idxs(),
-                     static_cast<size_type>(nnz), result.diag_col_idxs);
-    // BoomerAMG converges identically whether the diagonal block's columns
-    // are in Ginkgo's ascending order or reordered diagonal-first, so the
-    // block below is aliased directly rather than copied and reordered.
+        copy_as_hypre_int(exec, mtx->get_const_col_idxs(),
+                          static_cast<size_type>(nnz), result.diag_col_idxs);
+    result.diag_values = array<double>{exec, static_cast<size_type>(nnz)};
+    exec->copy(static_cast<size_type>(nnz), mtx->get_const_values(),
+               result.diag_values.get_data());
     set_block(hypre_ParCSRMatrixDiag(result.matrix), row_ptrs, col_idxs,
-              mtx->get_const_values(), static_cast<HYPRE_Int>(nnz));
+              result.diag_values.get_const_data(), static_cast<HYPRE_Int>(nnz));
     GKO_TPL_ASSERT_NO_HYPRE_ERRORS(
         hypre_ParCSRMatrixInitialize_v2(result.matrix, result.memory_location));
     hypre_CSRMatrixSetRownnz(hypre_ParCSRMatrixDiag(result.matrix));
+    reorder_diag_first(hypre_ParCSRMatrixDiag(result.matrix),
+                       result.memory_location);
     GKO_TPL_ASSERT_NO_HYPRE_ERRORS(
         hypre_ParCSRMatrixSetNumNonzeros(result.matrix));
     if (!hypre_ParCSRMatrixCommPkg(result.matrix)) {
@@ -276,6 +349,14 @@ par_csr build_distributed_par_csr(
     result.memory_location = memory_location_of(exec);
     result.system_matrix = std::move(owner);
 
+    // Establishes hypre's process-global policy before the first hypre
+    // object below is created, see the identical call in
+    // build_serial_par_csr. memory_location_of(exec) is the same on every
+    // rank for a matrix distributed with a consistent executor kind, so this
+    // throws uniformly (or not at all) before the first collective call
+    // below, the same guarantee solver::Pcg relies on for its own call.
+    set_process_policy(result.memory_location);
+
     // This rank's first global row is the number of rows the ranks before it
     // own, an exclusive scan of the local row counts.
     const auto num_local_rows = static_cast<std::int64_t>(diag->get_size()[0]);
@@ -295,14 +376,22 @@ par_csr build_distributed_par_csr(
                                              result.global_rows, starts, starts,
                                              num_cols_offd, diag_nnz, offd_nnz);
 
-    set_block(
-        hypre_ParCSRMatrixDiag(result.matrix),
-        as_hypre_int(exec, diag->get_const_row_ptrs(),
-                     static_cast<size_type>(num_local_rows) + 1,
-                     result.diag_row_ptrs),
-        as_hypre_int(exec, diag->get_const_col_idxs(),
-                     static_cast<size_type>(diag_nnz), result.diag_col_idxs),
-        diag->get_const_values(), diag_nnz);
+    // The diagonal block's columns and values are copies, in the same memory
+    // space, because reorder_diag_first permutes them in place; Ginkgo's own
+    // arrays must not be rearranged under the caller. The off-diagonal block
+    // holds no diagonal entry, so it is never reordered and keeps aliasing
+    // Ginkgo's memory, as do both blocks' row pointers.
+    result.diag_values = array<double>{exec, static_cast<size_type>(diag_nnz)};
+    exec->copy(static_cast<size_type>(diag_nnz), diag->get_const_values(),
+               result.diag_values.get_data());
+    set_block(hypre_ParCSRMatrixDiag(result.matrix),
+              as_hypre_int(exec, diag->get_const_row_ptrs(),
+                           static_cast<size_type>(num_local_rows) + 1,
+                           result.diag_row_ptrs),
+              copy_as_hypre_int(exec, diag->get_const_col_idxs(),
+                                static_cast<size_type>(diag_nnz),
+                                result.diag_col_idxs),
+              result.diag_values.get_const_data(), diag_nnz);
     set_block(
         hypre_ParCSRMatrixOffd(result.matrix),
         as_hypre_int(exec, offd->get_const_row_ptrs(),
@@ -315,6 +404,8 @@ par_csr build_distributed_par_csr(
         hypre_ParCSRMatrixInitialize_v2(result.matrix, result.memory_location));
     hypre_CSRMatrixSetRownnz(hypre_ParCSRMatrixDiag(result.matrix));
     hypre_CSRMatrixSetRownnz(hypre_ParCSRMatrixOffd(result.matrix));
+    reorder_diag_first(hypre_ParCSRMatrixDiag(result.matrix),
+                       result.memory_location);
 
     // The off-diagonal columns' global numbers, in the non-local block's
     // order; they live on the executor and hypre wants them on the host.

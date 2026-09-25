@@ -97,6 +97,35 @@ inline HYPRE_Int relax_type_id(const std::string& name)
 }
 
 
+// Whether hypre's BoomerAMG relaxation type `relax_type` has a device
+// implementation, i.e. runs correctly (rather than reading/writing host
+// memory over device pointers) when the ParCSR matrix and vectors live in
+// HYPRE_MEMORY_DEVICE.
+//
+// Device-capable: every relax_types() entry except 0, i.e. 3, 4, 6, 8, 9, 13,
+// 14, 16, 18. NOT device-capable: 0 ("Jacobi", plain weighted Jacobi), which
+// has no HYPRE_USING_GPU branch anywhere in its call chain, so a device
+// matrix runs it as host code over device pointers instead of reporting an
+// error. Use
+// "l1-Jacobi" (18) on a device instead: it forwards internally to hypre's
+// (unlisted) type 7, which is device-capable, and is otherwise the closest
+// match. solver::Pcg's constructor calls this predicate to reject
+// relax_type 0 on a device executor before setup runs, instead of letting
+// hypre crash.
+//
+// A value not yet covered above (unreachable today, since relax_type_id
+// only returns values from relax_types(), all covered here) is treated as
+// device-capable rather than rejected: a false rejection blocks a
+// legitimate device run, which is worse than letting a genuinely
+// unsupported type reach hypre. Such a type would still crash inside
+// hypre's solve if one is ever added to relax_types() without updating
+// this function.
+inline bool relax_type_runs_on_device(HYPRE_Int relax_type)
+{
+    return relax_type != 0;
+}
+
+
 }  // namespace detail
 }  // namespace hypre
 }  // namespace ext

@@ -57,10 +57,12 @@ namespace solver {
  *   solvers are created and configured, see get_import_time();
  * - setup: BoomerAMG's setup, see get_setup_time().
  *
- * Unlike the PETSc wrapper, the matrix is not copied: hypre's matrix points
- * at the Ginkgo matrix's arrays, which the solver keeps alive, and b and x
- * are handed to hypre in place on every apply. Nothing is staged through the
- * host, on any executor.
+ * Unlike the PETSc wrapper, the matrix is aliased from Ginkgo's arrays,
+ * which the solver keeps alive; b and x are handed to hypre in place on
+ * every apply. The exception is the diagonal block's columns and values,
+ * copied and permuted into hypre's required diagonal-first order (see
+ * detail/import.hpp), in the executor's own memory space; nothing is
+ * staged through the host.
  *
  * Supported system matrices:
  * - matrix::Csr<ValueType, LocalIndexType>, solved on MPI_COMM_SELF and
@@ -70,12 +72,17 @@ namespace solver {
  *   and applied to experimental::distributed::Vector vectors.
  *
  * hypre's memory location and execution policy are process-global: all
- * solvers in a process must run on the same kind of executor, and generating
- * one that would need the other policy throws.
+ * solvers in a process must share one, and generating one that needs the
+ * other throws. A GPU-enabled hypre defaults to HYPRE_MEMORY_DEVICE (set by
+ * HYPRE_Initialize()); every hypre object this component creates establishes
+ * the policy for its own memory location first, so this is handled
+ * automatically regardless of what else ran earlier in the process.
  *
  * Only a single right-hand side is supported. The input x is the initial
  * guess. A solve that does not converge does not throw, check
- * has_converged().
+ * has_converged(); get_num_iterations() and get_residual_norm() then report
+ * the attempt that was made, and x holds where it got to. Every other hypre
+ * failure still throws.
  *
  * hypre must be initialized before generation, e.g. with
  * gko::ext::hypre::environment, and every solver must be destroyed before
@@ -115,7 +122,14 @@ public:
         std::string GKO_FACTORY_PARAMETER_SCALAR(coarsen_type, std::string{});
         /** BoomerAMG interpolation, e.g. "ext+i". */
         std::string GKO_FACTORY_PARAMETER_SCALAR(interp_type, std::string{});
-        /** BoomerAMG smoother, e.g. "l1-Jacobi". */
+        /**
+         * BoomerAMG smoother, e.g. "l1-Jacobi".
+         *
+         * "Jacobi" (relaxation type 0) has no hypre device implementation;
+         * generating on a device executor with it throws here instead of
+         * crashing later inside hypre's solve, see
+         * detail::relax_type_runs_on_device. Use "l1-Jacobi" on a device.
+         */
         std::string GKO_FACTORY_PARAMETER_SCALAR(relax_type, std::string{});
         /** Smoother weight; negative keeps hypre's default. */
         double GKO_FACTORY_PARAMETER_SCALAR(relax_weight, -1.0);
@@ -188,16 +202,9 @@ public:
 
     /**
      * The hierarchy of the most recent setup. Grid complexity is the sum of
-     * rows_per_level divided by its first entry.
-     *
-     * It is always populated on the hypre versions this component supports
-     * (2.32.0 and newer): HYPRE_BoomerAMGGetGridHierarchy, which it is read
-     * from, is public API in both. The optional is empty only on a
-     * moved-from solver.
-     *
-     * Device PMIS draws a different hierarchy at every setup, so a benchmark
-     * that reports only iteration counts cannot tell two runs apart; this is
-     * what distinguishes them.
+     * rows_per_level divided by its first entry. Always populated on
+     * supported hypre (2.32 and newer); empty only on a moved-from solver.
+     * Device PMIS can draw a different hierarchy at every setup.
      */
     const std::optional<hierarchy>& get_hierarchy() const;
 
@@ -307,8 +314,9 @@ Pcg<ValueType, LocalIndexType, GlobalIndexType>::Pcg(
 
     const auto import_start = std::chrono::steady_clock::now();
 
-    // A policy conflict is a configuration error on every rank alike, so
-    // this throws uniformly, before any collective call below.
+    // Redundant with the identical call inside build_serial_par_csr /
+    // build_distributed_par_csr / placed_vector, but kept here so a policy
+    // conflict is reported uniformly, before any of that runs.
     detail::set_process_policy(
         detail::memory_location_of(this->get_executor()));
 
@@ -336,8 +344,18 @@ Pcg<ValueType, LocalIndexType, GlobalIndexType>::Pcg(
             state_->amg, detail::interp_type_id(params.interp_type)));
     }
     if (!params.relax_type.empty()) {
-        GKO_TPL_ASSERT_NO_HYPRE_ERRORS(HYPRE_BoomerAMGSetRelaxType(
-            state_->amg, detail::relax_type_id(params.relax_type)));
+        const auto relax_type = detail::relax_type_id(params.relax_type);
+        // Rejected now rather than crashing later inside hypre's solve, see
+        // relax_type_runs_on_device's documentation.
+        if (state_->device && !detail::relax_type_runs_on_device(relax_type)) {
+            GKO_INVALID_STATE(
+                "relax_type '" + params.relax_type +
+                "' has no hypre device implementation and would crash "
+                "inside hypre's solve on a device executor; use relax_type "
+                "\"l1-Jacobi\" instead");
+        }
+        GKO_TPL_ASSERT_NO_HYPRE_ERRORS(
+            HYPRE_BoomerAMGSetRelaxType(state_->amg, relax_type));
     }
     if (params.relax_weight >= 0.0) {
         GKO_TPL_ASSERT_NO_HYPRE_ERRORS(
@@ -425,26 +443,18 @@ Pcg<ValueType, LocalIndexType, GlobalIndexType>::Pcg(
     state_->setup_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
         setup_end - setup_start);
 
-    // HYPRE_BoomerAMGGetGridHierarchy is public API on every supported hypre
-    // (declared and exported since 2.32, not a 3.2 addition), so the guard
-    // stays at the find module's version floor rather than being dropped.
+    // HYPRE_BoomerAMGGetGridHierarchy is public API since hypre 2.32.
 #if HYPRE_RELEASE_NUMBER >= 23200
     {
-        // Fills an array of this rank's rows where entry i is the last level
-        // containing row i; the level count is the max plus one, and a
-        // level's rows are the entries that reach it. The reductions below
-        // are collective, which is why this sits in the constructor rather
-        // than get_hierarchy().
-        //
-        // Sized like the setup arrays above: hypre rejects a null array, and
-        // an empty std::vector's data() may be null. Only the first
-        // local_rows entries are read, so a no-row rank's padding entry
-        // does not count towards the finest level.
+        // last_level[i] is the last level row i reaches; level count is its
+        // max plus one. Sized max(1, local_rows): hypre rejects a null
+        // array, and an empty vector's data() may be null; only the first
+        // local_rows entries are read. The reductions below are collective,
+        // which is why this sits in the constructor rather than
+        // get_hierarchy(); the hypre error is folded into the same
+        // reduction so a rank-local throw cannot strand the others.
         std::vector<HYPRE_Int> last_level(std::max<size_type>(1, local_rows),
                                           0);
-        // Folded into the level-count reduction and thrown on every rank at
-        // once, the way apply_impl folds its rejections into one bitmask, so
-        // a rank-local throw cannot strand the others in the reduction.
         const auto hierarchy_error = static_cast<int>(
             HYPRE_BoomerAMGGetGridHierarchy(state_->amg, last_level.data()));
         if (hierarchy_error != 0) {
@@ -591,18 +601,39 @@ void Pcg<ValueType, LocalIndexType, GlobalIndexType>::apply_impl(const LinOp* b,
     // hypre reads and writes b and x in place, wherever they live.
     auto solve = [this](const double* b_values, double* x_values) {
         // Re-points the vectors built at generation rather than constructing
-        // new ones, which is not free on 3.2 (HYPRE_IJVectorAssemble does an
+        // new ones, which is not free on 2.33+ (HYPRE_IJVectorAssemble does an
         // unconditional Allreduce); needs no re-assembly, see
         // placed_vector::set_values.
         auto& hypre_b = *state_->setup_b;
         auto& hypre_x = *state_->setup_x;
         hypre_b.set_values(b_values);
         hypre_x.set_values(x_values);
-        GKO_TPL_ASSERT_NO_HYPRE_ERRORS(HYPRE_ParCSRPCGSolve(
+        // HYPRE_ERROR_CONV is hypre's non-convergence flag, returned through
+        // the same global bitmask as real failures, so it cannot go through
+        // GKO_TPL_ASSERT_NO_HYPRE_ERRORS unfiltered: that would throw for
+        // the non-convergence has_converged() documents as normal. The
+        // convergence bit is cleared below; every other bit still throws.
+        const HYPRE_Int solve_error = HYPRE_ParCSRPCGSolve(
             state_->pcg,
             reinterpret_cast<HYPRE_ParCSRMatrix>(state_->matrix.matrix),
             reinterpret_cast<HYPRE_ParVector>(hypre_b.get()),
-            reinterpret_cast<HYPRE_ParVector>(hypre_x.get())));
+            reinterpret_cast<HYPRE_ParVector>(hypre_x.get()));
+        // The flag is global and sticky until cleared; clearing the
+        // convergence bit here (HYPRE_ClearError touches only that bit)
+        // keeps a non-converged solve from surfacing as a failure of a
+        // later, unrelated hypre call.
+        if (solve_error & HYPRE_ERROR_CONV) {
+            HYPRE_ClearError(HYPRE_ERROR_CONV);
+        }
+        const HYPRE_Int fatal_error = solve_error & ~HYPRE_ERROR_CONV;
+        if (fatal_error != 0) {
+            const auto description = detail::describe_error(fatal_error);
+            HYPRE_ClearAllErrors();
+            GKO_INVALID_STATE(std::string("hypre error code ") +
+                              std::to_string(static_cast<int>(fatal_error)) +
+                              " (" + description +
+                              ") returned by HYPRE_ParCSRPCGSolve");
+        }
         HYPRE_Int iterations = 0;
         HYPRE_Real norm = 0.0;
         HYPRE_Int converged = 0;
@@ -620,15 +651,12 @@ void Pcg<ValueType, LocalIndexType, GlobalIndexType>::apply_impl(const LinOp* b,
         using dist_vec = experimental::distributed::Vector<ValueType>;
         auto dist_b = dynamic_cast<const dist_vec*>(b);
         auto dist_x = dynamic_cast<dist_vec*>(x);
-        // Every rejection below depends on this rank's own operands (a bad
-        // cast, a local stride, or a local size can each be wrong on only
-        // some ranks), while placing the vectors and HYPRE_ParCSRPCGSolve at
-        // the end of this branch are collective. Folding every rejection into
-        // one bitmask and reducing it before any throw guarantees every rank
-        // that enters this branch reaches the same collective, and that if
-        // any rank must throw, all ranks throw the same exception together,
-        // instead of leaving some ranks blocked in hypre (or, if the throws
-        // stayed rank-local, in this very reduction).
+        // Every rejection below is rank-local (a bad cast, stride, or size
+        // can differ per rank), while placing the vectors and
+        // HYPRE_ParCSRPCGSolve are collective. Folding rejections into one
+        // bitmask and reducing before any throw keeps every rank reaching
+        // the same collective, so a throw on one rank cannot strand the
+        // others.
         constexpr int bad_cast_flag = 1;
         constexpr int stride_flag = 2;
         constexpr int size_flag = 4;
